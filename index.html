@@ -409,6 +409,7 @@
   .reemb-attach{font-size:.75rem;color:var(--muted);margin-top:6px;}
   .reemb-actions .reemb-start{flex:1;padding:10px 12px;min-height:44px;font-size:.88rem;}
   .reemb-actions .reemb-hist{flex:1;padding:10px 12px;min-height:44px;font-size:.88rem;}
+  .reemb-skip{width:100%;background:none;border:none;color:var(--muted);text-decoration:underline;font-size:.82rem;padding:6px 4px;min-height:36px;cursor:pointer;text-align:center;}
   .reemb-hint{font-size:.78rem;color:var(--muted);margin-top:6px;}
   .tab-btn{font-size:.6rem;letter-spacing:0;padding:12px 1px;min-width:0;}
   .tab-btn{justify-content:flex-start;}
@@ -685,12 +686,36 @@ var ICONS = {
 
   function isConfigured(person){ return !!(person && (person.prevision || person.seguro)); }
 
-  function defaultReembolso(person, type){
+  // Reglas aprendidas: qué doctores / especialidades no pasan por la Isapre
+  function ruleKeys(visit){
+    var k = [];
+    if(visit && visit.doctor && visit.doctor.trim()) k.push('doc:' + visit.doctor.trim().toLowerCase());
+    if(visit && visit.specialty && visit.specialty.trim()) k.push('esp:' + visit.specialty.trim().toLowerCase());
+    return k;
+  }
+  function skipsPrevision(visit){
+    var rules = db.reembRules || {};
+    var keys = ruleKeys(visit);
+    // El doctor manda; si no hay regla de doctor, se usa la especialidad
+    if(keys[0] && keys[0].indexOf('doc:') === 0 && rules[keys[0]] !== undefined) return rules[keys[0]] === 'directo';
+    var esp = keys.filter(function(k){ return k.indexOf('esp:') === 0; })[0];
+    return !!(esp && rules[esp] === 'directo');
+  }
+  function learnRule(visit, directo){
+    var keys = ruleKeys(visit);
+    if(!keys.length) return;
+    if(!db.reembRules) db.reembRules = {};
+    var key = keys[0]; // doctor si existe, si no especialidad
+    if(directo) db.reembRules[key] = 'directo';
+    else if(db.reembRules[key] === 'directo' || key.indexOf('doc:') === 0) db.reembRules[key] = 'isapre';
+  }
+
+  function defaultReembolso(person, type, visit){
     // Persona sin configurar: no sabemos si tiene seguro, así que se asume pendiente
     var segEstado = (person && person.seguro) || !isConfigured(person) ? 'pendiente' : 'na';
     return {
       monto: '',
-      prev: { estado: type === 'bono' ? 'na' : 'pendiente', fecha: '', monto: '' },
+      prev: { estado: (type === 'bono' || skipsPrevision(visit)) ? 'na' : 'pendiente', fecha: '', monto: '' },
       seg: { estado: segEstado, fecha: '', monto: '' }
     };
   }
@@ -699,10 +724,10 @@ var ICONS = {
   function docLabel(t){ return DOC_LABEL[t] || t; }
   function isReembDoc(doc){ return doc.type === 'boleta' || doc.type === 'bono'; }
 
-  function makeDoc(name, dataUrl, type, person){
+  function makeDoc(name, dataUrl, type, person, visit){
     var d = { id: uid(), name: name, dataUrl: dataUrl, type: type };
     // Con bono la Isapre ya pagó su parte: solo queda el seguro
-    if(isReembDoc(d)) d.reembolso = defaultReembolso(person, type);
+    if(isReembDoc(d)) d.reembolso = defaultReembolso(person, type, visit);
     return d;
   }
 
@@ -764,6 +789,7 @@ var ICONS = {
     if(!isSeg && e === 'na' && doc && doc.type === 'bono'){
       return '<span class="st st-na">Pagado con bono</span>';
     }
+    if(!isSeg && e === 'na') return '<span class="st st-na">No cubre</span>';
     if(isSeg && e === 'pendiente' && isOpenEstado(r.prev.estado)){
       return '<span class="st st-esperando">Esperando previsión</span>';
     }
@@ -854,6 +880,9 @@ var ICONS = {
           : '<button class="btn-primary reemb-quick"' + ids + ' data-part="' + na.part + '" data-act="recibir" type="button">' + icon('banknote', 14) + ' Recibí respuesta de ' + who + '</button>';
       }
       actions = primary + '<button class="btn-secondary reemb-btn reemb-edit"' + ids + ' type="button">' + icon('pencil', 14) + ' Editar</button>';
+      if(na && na.part === 'prev' && na.act === 'enviar'){
+        actions += '</div><div class="reemb-actions"><button class="reemb-skip"' + ids + ' type="button">No pasa por ' + esc(prevLabel(p)) + ' → directo al seguro</button>';
+      }
     }
     return '' +
     '<div class="card">' +
@@ -1428,7 +1457,7 @@ var ICONS = {
           e.stopPropagation();
           var f = findDoc(btn.dataset.personId, btn.dataset.visitId, btn.dataset.docId);
           if(!f) return;
-          f.doc.reembolso = btn.classList.contains('reemb-start') ? defaultReembolso(f.person, f.doc.type) : historicReembolso(f.doc, f.person);
+          f.doc.reembolso = btn.classList.contains('reemb-start') ? defaultReembolso(f.person, f.doc.type, f.visit) : historicReembolso(f.doc, f.person);
           if(saveDB()) render();
         });
       });
@@ -1441,9 +1470,23 @@ var ICONS = {
           if(saveDB()){ view = { type: 'reembolsos', filter: 'porenviar' }; render(); }
         });
       }
+      qa('.reemb-skip').forEach(function(btn){
+        btn.addEventListener('click', function(e){
+          e.stopPropagation();
+          var f = findDoc(btn.dataset.personId, btn.dataset.visitId, btn.dataset.docId);
+          if(!f || !f.doc.reembolso) return;
+          f.doc.reembolso.prev = { estado: 'na', fecha: '', monto: '' };
+          learnRule(f.visit, true);
+          if(saveDB()) render();
+        });
+      });
       qa('.reemb-quick').forEach(function(btn){
         btn.addEventListener('click', function(e){
           e.stopPropagation();
+          if(btn.dataset.act === 'enviar' && btn.dataset.part === 'prev'){
+            var fv = findDoc(btn.dataset.personId, btn.dataset.visitId, btn.dataset.docId);
+            if(fv) learnRule(fv.visit, false);
+          }
           if(btn.dataset.act === 'enviar') quickEnviar(btn.dataset.personId, btn.dataset.visitId, btn.dataset.docId, btn.dataset.part);
           else openRecibirModal(btn.dataset.personId, btn.dataset.visitId, btn.dataset.docId, btn.dataset.part);
         });
@@ -1528,7 +1571,7 @@ var ICONS = {
       if(target.mode === 'pending'){
         openDocTypeChooser(dataUrl, file.name, function(type){
           var tPerson = db.people.filter(function(p){ return p.id === target.personId; })[0];
-          target.draft.pendingDocs.push(makeDoc(file.name, dataUrl, type, tPerson));
+          target.draft.pendingDocs.push(makeDoc(file.name, dataUrl, type, tPerson, target.draft));
           openVisitModal(target.personId, target.visitId, target.draft);
         });
       } else {
@@ -1536,7 +1579,7 @@ var ICONS = {
         var visit = person.visits.filter(function(v){ return v.id === target.visitId; })[0];
         if(!visit.documents) visit.documents = [];
         openDocTypeChooser(dataUrl, file.name, function(type){
-          var newDoc = makeDoc(file.name, dataUrl, type, person);
+          var newDoc = makeDoc(file.name, dataUrl, type, person, visit);
           visit.documents.push(newDoc);
           expandedVisits.add(visit.id);
           if(saveDB()){
@@ -1909,7 +1952,7 @@ var ICONS = {
     if(!visit) return;
     var doc = (visit.documents || []).filter(function(d){ return d.id === docId; })[0];
     if(!doc) return;
-    var r = doc.reembolso ? JSON.parse(JSON.stringify(doc.reembolso)) : defaultReembolso(person, doc.type);
+    var r = doc.reembolso ? JSON.parse(JSON.stringify(doc.reembolso)) : defaultReembolso(person, doc.type, visit);
 
     function sectionHtml(key, title){
       var part = r[key];
@@ -2012,6 +2055,11 @@ var ICONS = {
         if(!confirm('Normalmente el seguro pide la liquidación de la previsión primero, y la previsión aún no responde. ¿Guardar igual?')) return;
       }
       doc.type = val('r-tipo');
+      if(doc.type === 'boleta'){
+        var before = doc.reembolso ? doc.reembolso.prev.estado : null;
+        if(f.prev.estado === 'na' && before !== 'na') learnRule(visit, true);
+        if(f.prev.estado !== 'na' && before === 'na') learnRule(visit, false);
+      }
       doc.reembolso = f;
       if(saveDB()){
         closeModal();

@@ -398,8 +398,10 @@
   .empty{display:flex;flex-direction:column;align-items:center;gap:10px;color:var(--muted);}
   .empty .icon{width:40px;height:40px;}
   /* ---- Reembolsos ---- */
-  .tab-btn{font-size:.62rem;letter-spacing:.02em;padding:12px 2px;min-width:0;}
-  .tab-btn span{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .tab-btn{font-size:.6rem;letter-spacing:0;padding:12px 1px;min-width:0;}
+  .tab-btn{justify-content:flex-start;}
+  @media (max-width:340px){ .tab-btn{font-size:.54rem;} }
+  .tab-btn span{max-width:100%;text-align:center;line-height:1.15;}
   .filter-row{display:flex;gap:6px;margin:4px 0 12px;}
   .filter-chip{flex:1;border:1px solid var(--border);background:var(--card-bg);color:var(--text);border-radius:999px;padding:8px 6px;font-size:.8rem;font-weight:600;min-height:40px;cursor:pointer;}
   .filter-chip.active{background:#ef4444;border-color:#ef4444;color:#fff;}
@@ -873,7 +875,7 @@ var ICONS = {
       { type: 'inicio', label: 'Inicio', icon: 'users' },
       { type: 'ordenes', label: 'Órdenes', icon: 'clipboard-list' },
       { type: 'recetas', label: 'Recetas', icon: 'pill' },
-      { type: 'boletas', label: 'Boletas', icon: 'receipt' },
+      { type: 'boletas', label: 'Boletas y bonos', icon: 'receipt' },
       { type: 'reembolsos', label: 'Reembolsos', icon: 'banknote' }
     ];
     var html = '<nav class="tab-nav">' + tabs.map(function(tab){

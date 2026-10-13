@@ -252,6 +252,9 @@
   .doc-type-tag.orden{background:#fee2e2;color:#991b1b;}
   .doc-type-tag.receta{background:#f3f4f6;color:#2d3748;}
   .doc-type-tag.boleta{background:#fef3c7;color:#92400e;}
+  .doc-type-tag.bono{background:#dbeafe;color:#1e40af;}
+  .doc-type-grid{flex-wrap:wrap;}
+  .doc-type-grid button{flex:1 1 45%;}
   .btn-secondary,.btn-primary{
     border:none;
     border-radius:10px;
@@ -658,9 +661,18 @@ var ICONS = {
     };
   }
 
+  var DOC_LABEL = { orden: 'Orden', receta: 'Receta', boleta: 'Boleta', bono: 'Bono Isapre' };
+  function docLabel(t){ return DOC_LABEL[t] || t; }
+  function isReembDoc(doc){ return doc.type === 'boleta' || doc.type === 'bono'; }
+
   function makeDoc(name, dataUrl, type, person){
     var d = { id: uid(), name: name, dataUrl: dataUrl, type: type };
     if(type === 'boleta') d.reembolso = defaultReembolso(person);
+    if(type === 'bono'){
+      // Con bono la Isapre ya pagó su parte: solo queda el seguro
+      d.reembolso = defaultReembolso(person);
+      d.reembolso.prev.estado = 'na';
+    }
     return d;
   }
 
@@ -717,8 +729,11 @@ var ICONS = {
     return Number(r.monto) - reembRecuperado(r);
   }
 
-  function estadoChip(part, isSeg, r){
+  function estadoChip(part, isSeg, r, doc){
     var e = part.estado;
+    if(!isSeg && e === 'na' && doc && doc.type === 'bono'){
+      return '<span class="st st-na">Pagado con bono</span>';
+    }
     if(isSeg && e === 'pendiente' && isOpenEstado(r.prev.estado)){
       return '<span class="st st-esperando">Esperando previsión</span>';
     }
@@ -738,8 +753,8 @@ var ICONS = {
     return '' +
     '<div class="reemb-block">' +
       (hasVal(r.monto) ? '<div class="reemb-line"><strong style="color:var(--text);">' + fmtCLP(r.monto) + '</strong>' + (copago !== null && reembRecuperado(r) > 0 ? ' · copago ' + fmtCLP(copago) : '') + '</div>' : '') +
-      '<div class="reemb-line">' + esc(prevLabel(person)) + ': ' + estadoChip(r.prev, false, r) + '</div>' +
-      '<div class="reemb-line">' + esc(segLabel(person)) + ': ' + estadoChip(r.seg, true, r) + '</div>' +
+      '<div class="reemb-line">' + esc(prevLabel(person)) + ': ' + estadoChip(r.prev, false, r, doc) + '</div>' +
+      '<div class="reemb-line">' + esc(segLabel(person)) + ': ' + estadoChip(r.seg, true, r, doc) + '</div>' +
     '</div>';
   }
 
@@ -748,7 +763,7 @@ var ICONS = {
     db.people.forEach(function(person){
       person.visits.forEach(function(visit){
         (visit.documents || []).forEach(function(doc){
-          if(doc.type === 'boleta') out.push({ doc: doc, visit: visit, person: person });
+          if(isReembDoc(doc)) out.push({ doc: doc, visit: visit, person: person });
         });
       });
     });
@@ -764,6 +779,7 @@ var ICONS = {
         '<div style="flex:1;min-width:0;">' +
           '<div class="reemb-who"><div class="avatar" style="background:' + colorForId(p.id) + ';width:24px;height:24px;font-size:.65rem;">' + initialsFor(p.name) + '</div>' + esc(p.name) + '</div>' +
           '<div class="card-subtitle" style="margin-top:2px;">' + formatDate(v.date) + (v.specialty ? ' · ' + esc(v.specialty) : '') + (v.healthCenter ? ' · ' + esc(v.healthCenter) : '') + '</div>' +
+          '<span class="doc-type-tag ' + doc.type + '">' + docLabel(doc.type) + '</span>' +
           renderReembBlock(doc, p) +
           '<button class="btn-secondary reemb-btn" data-doc-id="' + doc.id + '" data-visit-id="' + v.id + '" data-person-id="' + p.id + '" type="button">' + icon('pencil', 14) + ' ' + (doc.reembolso ? 'Actualizar' : 'Registrar reembolso') + '</button>' +
         '</div>' +
@@ -970,14 +986,14 @@ var ICONS = {
   }
 
   function renderDocumentsByType(docType){
-    var docTypeLabel = docType === 'ordenes' ? 'Órdenes' : docType === 'recetas' ? 'Recetas' : 'Boletas';
+    var docTypeLabel = docType === 'ordenes' ? 'Órdenes' : docType === 'recetas' ? 'Recetas' : 'Boletas y bonos';
     var singularType = docType === 'ordenes' ? 'orden' : docType === 'recetas' ? 'receta' : 'boleta';
     var allDocs = [];
     db.people.forEach(function(person){
       person.visits.forEach(function(visit){
         if(visit.documents){
           visit.documents.forEach(function(doc){
-            if(doc.type === singularType){
+            if(doc.type === singularType || (singularType === 'boleta' && doc.type === 'bono')){
               allDocs.push({
                 doc: doc,
                 visit: visit,
@@ -1056,11 +1072,11 @@ var ICONS = {
     var detailsHtml = '';
     if(isOpen){
       var docsHtml = '';
-      ['orden', 'receta', 'boleta'].forEach(function(dtype){
+      ['orden', 'receta', 'boleta', 'bono'].forEach(function(dtype){
         var docs = v.documents ? v.documents.filter(function(d){ return d.type === dtype; }) : [];
         if(docs.length){
           docsHtml += '<div style="margin-top:12px;">' +
-            '<span class="detail-label">' + (dtype === 'orden' ? 'Órdenes' : dtype === 'receta' ? 'Recetas' : 'Boletas') + '</span>' +
+            '<span class="detail-label">' + ({ orden: 'Órdenes', receta: 'Recetas', boleta: 'Boletas', bono: 'Bonos Isapre' })[dtype] + '</span>' +
             '<div class="doc-row">' + docs.map(function(d){
               return '' +
               '<div class="doc-thumb-wrap">' +
@@ -1110,9 +1126,9 @@ var ICONS = {
         '<img src="' + doc.dataUrl + '" style="width:60px;height:60px;object-fit:cover;border-radius:8px;cursor:pointer;" class="view-doc-btn" data-doc-id="' + doc.id + '" data-visit-id="' + visitId + '" data-person-id="' + personId + '" alt="Documento">' +
         '<div style="flex:1;min-width:0;">' +
           '<div style="font-weight:600;word-break:break-word;">' + esc(doc.name) + '</div>' +
-          '<span class="doc-type-tag ' + doc.type + '">' + doc.type + '</span>' +
+          '<span class="doc-type-tag ' + doc.type + '">' + docLabel(doc.type) + '</span>' +
           (visit ? '<div class="card-subtitle" style="margin-top:4px;">' + formatDate(visit.date) + '</div>' : '') +
-          (doc.type === 'boleta' ? renderReembBlock(doc, person) +
+          (isReembDoc(doc) ? renderReembBlock(doc, person) +
             '<button class="btn-secondary reemb-btn" data-doc-id="' + doc.id + '" data-visit-id="' + visitId + '" data-person-id="' + personId + '" type="button">' + icon('banknote', 14) + ' ' + (doc.reembolso ? 'Actualizar reembolso' : 'Registrar reembolso') + '</button>' : '') +
         '</div>' +
         '<button class="icon-btn danger doc-delete-btn" data-doc-id="' + doc.id + '" data-visit-id="' + visitId + '" data-person-id="' + personId + '" aria-label="Eliminar" type="button" style="flex-shrink:0;">' + icon('trash-2', 18) + '</button>' +
@@ -1493,7 +1509,7 @@ var ICONS = {
         return '' +
         '<div class="doc-thumb-wrap" data-pending-id="' + d.id + '" style="position:relative;">' +
           '<img src="' + d.dataUrl + '" class="doc-thumb" alt="Documento">' +
-          '<span class="doc-type-tag ' + d.type + '" style="position:absolute;bottom:4px;left:4px;">' + d.type + '</span>' +
+          '<span class="doc-type-tag ' + d.type + '" style="position:absolute;bottom:4px;left:4px;">' + docLabel(d.type) + '</span>' +
           '<button class="doc-delete-btn pending-doc-delete" data-pending-id="' + d.id + '" aria-label="Eliminar documento" type="button">' + icon('trash-2', 14) + '</button>' +
         '</div>';
       }).join('') + '</div>';
@@ -1609,14 +1625,15 @@ var ICONS = {
           '</div>' +
           '<label>Tipo de documento</label>' +
         '</div>' +
-        '<div class="modal-actions">' +
+        '<div class="modal-actions doc-type-grid">' +
           '<button class="btn-secondary" id="docType-orden" type="button">' + icon('clipboard-list', 16) + ' Orden</button>' +
           '<button class="btn-secondary" id="docType-receta" type="button">' + icon('pill', 16) + ' Receta</button>' +
           '<button class="btn-secondary" id="docType-boleta" type="button">' + icon('receipt', 16) + ' Boleta</button>' +
+          '<button class="btn-secondary" id="docType-bono" type="button">' + icon('banknote', 16) + ' Bono Isapre</button>' +
         '</div>' +
       '</div>' +
     '</div>';
-    ['orden', 'receta', 'boleta'].forEach(function(type){
+    ['orden', 'receta', 'boleta', 'bono'].forEach(function(type){
       document.getElementById('docType-' + type).addEventListener('click', function(){
         onSelect(type);
       });
@@ -1656,10 +1673,10 @@ var ICONS = {
     modalRoot.innerHTML = '' +
     '<div class="modal-overlay" id="modalOverlay">' +
       '<div class="modal">' +
-        '<div class="modal-header">Reembolso</div>' +
+        '<div class="modal-header">Reembolso · ' + docLabel(doc.type) + '</div>' +
         '<div class="modal-body">' +
           '<div class="card-subtitle" style="margin-bottom:8px;">' + esc(person.name) + ' · ' + formatDate(visit.date) + (visit.specialty ? ' · ' + esc(visit.specialty) : '') + '</div>' +
-          '<label for="r-monto">Monto de la boleta ($)</label>' +
+          '<label for="r-monto">' + (doc.type === 'bono' ? 'Copago pagado ($)' : 'Monto de la boleta ($)') + '</label>' +
           '<input type="number" inputmode="numeric" min="0" id="r-monto" value="' + esc(r.monto) + '" placeholder="Ej: 45000">' +
           sectionHtml('prev', prevLabel(person)) +
           sectionHtml('seg', segLabel(person) + ' (complementario)') +

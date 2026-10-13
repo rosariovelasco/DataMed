@@ -398,6 +398,10 @@
   .empty{display:flex;flex-direction:column;align-items:center;gap:10px;color:var(--muted);}
   .empty .icon{width:40px;height:40px;}
   /* ---- Reembolsos ---- */
+  .pick-visit-btn{width:100%;text-align:left;display:flex;align-items:center;gap:10px;margin-bottom:8px;}
+  .pick-visit-btn .pv-main{flex:1;min-width:0;}
+  .pick-visit-btn .pv-sub{font-size:.78rem;color:var(--muted);font-weight:500;}
+  .reemb-hint{font-size:.78rem;color:var(--muted);margin-top:6px;}
   .tab-btn{font-size:.6rem;letter-spacing:0;padding:12px 1px;min-width:0;}
   .tab-btn{justify-content:flex-start;}
   @media (max-width:340px){ .tab-btn{font-size:.54rem;} }
@@ -484,6 +488,21 @@ var ICONS = {
   }
 
   var db = loadDB();
+  (function migrateReembolsos(){
+    var changed = false;
+    db.people.forEach(function(person){
+      if(person.prevision || person.seguro) return;
+      person.visits.forEach(function(v){
+        (v.documents || []).forEach(function(d){
+          var r = d.reembolso;
+          if(!r || (d.type !== 'boleta' && d.type !== 'bono')) return;
+          var untouched = r.monto === '' && r.seg.estado === 'na' && !r.seg.fecha && r.seg.monto === '' && !r.prev.fecha && r.prev.monto === '';
+          if(untouched){ r.seg.estado = 'pendiente'; changed = true; }
+        });
+      });
+    });
+    if(changed){ try { localStorage.setItem(STORAGE_KEY, JSON.stringify(db)); } catch(e){} }
+  })();
   var view = { type: 'inicio' };
   var expandedSpecialties = new Set();
   var expandedVisits = new Set();
@@ -655,11 +674,15 @@ var ICONS = {
   var PREVISIONES = ['Fonasa', 'Banmédica', 'Colmena', 'Consalud', 'Cruz Blanca', 'Esencial', 'Nueva Masvida', 'Vida Tres'];
   var ESTADO_LABEL = { na: 'No aplica', pendiente: 'Pendiente', enviado: 'Enviado', reembolsado: 'Reembolsado', rechazado: 'Rechazado' };
 
-  function defaultReembolso(person){
+  function isConfigured(person){ return !!(person && (person.prevision || person.seguro)); }
+
+  function defaultReembolso(person, type){
+    // Persona sin configurar: no sabemos si tiene seguro, así que se asume pendiente
+    var segEstado = (person && person.seguro) || !isConfigured(person) ? 'pendiente' : 'na';
     return {
       monto: '',
-      prev: { estado: 'pendiente', fecha: '', monto: '' },
-      seg: { estado: (person && person.seguro) ? 'pendiente' : 'na', fecha: '', monto: '' }
+      prev: { estado: type === 'bono' ? 'na' : 'pendiente', fecha: '', monto: '' },
+      seg: { estado: segEstado, fecha: '', monto: '' }
     };
   }
 
@@ -669,12 +692,8 @@ var ICONS = {
 
   function makeDoc(name, dataUrl, type, person){
     var d = { id: uid(), name: name, dataUrl: dataUrl, type: type };
-    if(type === 'boleta') d.reembolso = defaultReembolso(person);
-    if(type === 'bono'){
-      // Con bono la Isapre ya pagó su parte: solo queda el seguro
-      d.reembolso = defaultReembolso(person);
-      d.reembolso.prev.estado = 'na';
-    }
+    // Con bono la Isapre ya pagó su parte: solo queda el seguro
+    if(isReembDoc(d)) d.reembolso = defaultReembolso(person, type);
     return d;
   }
 
@@ -1146,7 +1165,9 @@ var ICONS = {
         openPersonModal(null);
       } else if(view.type === 'person'){
         openVisitModal(view.personId, null);
-      } else if(view.type === 'ordenes' || view.type === 'recetas' || view.type === 'boletas' || view.type === 'reembolsos'){
+      } else if(view.type === 'reembolsos'){
+        openReembAddFlow();
+      } else if(view.type === 'ordenes' || view.type === 'recetas' || view.type === 'boletas'){
         openPersonPickerForVisit();
       }
     };
@@ -1350,13 +1371,16 @@ var ICONS = {
         var visit = person.visits.filter(function(v){ return v.id === target.visitId; })[0];
         if(!visit.documents) visit.documents = [];
         openDocTypeChooser(dataUrl, file.name, function(type){
-          visit.documents.push(makeDoc(file.name, dataUrl, type, person));
+          var newDoc = makeDoc(file.name, dataUrl, type, person);
+          visit.documents.push(newDoc);
           expandedVisits.add(visit.id);
           if(saveDB()){
             closeModal();
             render();
+            // Boleta o bono: pasar directo a registrar el reembolso
+            if(isReembDoc(newDoc)) openReembolsoModal(person.id, visit.id, newDoc.id);
           }
-        });
+        }, target.mode === 'reemb' ? ['boleta', 'bono'] : null);
       }
     }).catch(function(err){
       console.error(err);
@@ -1616,7 +1640,7 @@ var ICONS = {
     });
   }
 
-  function openDocTypeChooser(dataUrl, filename, onSelect){
+  function openDocTypeChooser(dataUrl, filename, onSelect, allowed){
     modalRoot.innerHTML = '' +
     '<div class="modal-overlay" id="modalOverlay">' +
       '<div class="modal">' +
@@ -1636,9 +1660,80 @@ var ICONS = {
       '</div>' +
     '</div>';
     ['orden', 'receta', 'boleta', 'bono'].forEach(function(type){
-      document.getElementById('docType-' + type).addEventListener('click', function(){
+      var b = document.getElementById('docType-' + type);
+      if(allowed && allowed.indexOf(type) === -1){ b.remove(); return; }
+      b.addEventListener('click', function(){
         onSelect(type);
       });
+    });
+  }
+
+  function openReembAddFlow(){
+    if(db.people.length === 0){ openPersonModal(null); return; }
+    var all = [];
+    db.people.forEach(function(p){ p.visits.forEach(function(v){ all.push({ p: p, v: v }); }); });
+    all.sort(function(a, b){ return (b.v.date || '').localeCompare(a.v.date || ''); });
+    var list = all.slice(0, 20);
+    modalRoot.innerHTML = '' +
+    '<div class="modal-overlay" id="modalOverlay">' +
+      '<div class="modal">' +
+        '<div class="modal-header">¿De qué atención es la boleta o bono?</div>' +
+        '<div class="modal-body">' +
+          (list.length ? list.map(function(it){
+            return '' +
+            '<button class="btn-secondary pick-visit-btn" data-person-id="' + it.p.id + '" data-visit-id="' + it.v.id + '" type="button">' +
+              '<div class="avatar" style="background:' + colorForId(it.p.id) + ';width:32px;height:32px;font-size:0.8rem;flex-shrink:0;">' + initialsFor(it.p.name) + '</div>' +
+              '<div class="pv-main"><div>' + esc(it.p.name) + ' · ' + formatDate(it.v.date) + '</div>' +
+              '<div class="pv-sub">' + (it.v.specialty ? esc(it.v.specialty) : 'Sin especialidad') + (it.v.doctor ? ' · ' + esc(it.v.doctor) : '') + '</div></div>' +
+            '</button>';
+          }).join('') : '<div class="card-subtitle">Aún no hay registros médicos.</div>') +
+          '<button class="btn-secondary" id="pickNewVisit" type="button" style="width:100%;margin-top:4px;">+ Es de una atención que no he registrado</button>' +
+        '</div>' +
+        '<div class="modal-actions">' +
+          '<button class="btn-secondary" id="modalCancel" type="button">Cancelar</button>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+    bindModalShell();
+    document.getElementById('pickNewVisit').addEventListener('click', function(){ openPersonPickerForVisit(); });
+    Array.prototype.slice.call(modalRoot.querySelectorAll('.pick-visit-btn')).forEach(function(btn){
+      btn.addEventListener('click', function(){
+        openReembPhotoStep(btn.dataset.personId, btn.dataset.visitId);
+      });
+    });
+  }
+
+  function openReembPhotoStep(personId, visitId){
+    var person = db.people.filter(function(p){ return p.id === personId; })[0];
+    var visit = person && person.visits.filter(function(v){ return v.id === visitId; })[0];
+    if(!visit) return;
+    modalRoot.innerHTML = '' +
+    '<div class="modal-overlay" id="modalOverlay">' +
+      '<div class="modal">' +
+        '<div class="modal-header">Foto de la boleta o bono</div>' +
+        '<div class="modal-body">' +
+          '<div class="card-subtitle" style="margin-bottom:12px;">' + esc(person.name) + ' · ' + formatDate(visit.date) + (visit.specialty ? ' · ' + esc(visit.specialty) : '') + '</div>' +
+          '<div style="display:flex;gap:8px;">' +
+            '<button class="btn-secondary" id="reembCam" type="button" style="flex:1;">' + icon('camera', 16) + ' Cámara</button>' +
+            '<button class="btn-secondary" id="reembGal" type="button" style="flex:1;">' + icon('image', 16) + ' Galería</button>' +
+          '</div>' +
+        '</div>' +
+        '<div class="modal-actions">' +
+          '<button class="btn-secondary" id="reembBack" type="button">Volver</button>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+    bindModalShell();
+    document.getElementById('reembBack').addEventListener('click', openReembAddFlow);
+    document.getElementById('reembCam').addEventListener('click', function(){
+      currentPhotoTarget = { mode: 'reemb', personId: personId, visitId: visitId };
+      photoInputCamera.value = '';
+      photoInputCamera.click();
+    });
+    document.getElementById('reembGal').addEventListener('click', function(){
+      currentPhotoTarget = { mode: 'reemb', personId: personId, visitId: visitId };
+      photoInput.value = '';
+      photoInput.click();
     });
   }
 
@@ -1649,7 +1744,7 @@ var ICONS = {
     if(!visit) return;
     var doc = (visit.documents || []).filter(function(d){ return d.id === docId; })[0];
     if(!doc) return;
-    var r = doc.reembolso ? JSON.parse(JSON.stringify(doc.reembolso)) : defaultReembolso(person);
+    var r = doc.reembolso ? JSON.parse(JSON.stringify(doc.reembolso)) : defaultReembolso(person, doc.type);
 
     function sectionHtml(key, title){
       var part = r[key];
@@ -1682,6 +1777,7 @@ var ICONS = {
           '<input type="number" inputmode="numeric" min="0" id="r-monto" value="' + esc(r.monto) + '" placeholder="Ej: 45000">' +
           sectionHtml('prev', prevLabel(person)) +
           sectionHtml('seg', segLabel(person) + ' (complementario)') +
+          (!person.seguro ? '<div class="reemb-hint">' + esc(person.name) + ' no tiene seguro registrado. Si tiene, agrégalo en su ficha (Inicio → lápiz) y quedará por defecto.</div>' : '') +
           '<div class="copago-box" id="r-copago"></div>' +
         '</div>' +
         '<div class="modal-actions">' +

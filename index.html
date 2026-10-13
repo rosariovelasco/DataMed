@@ -401,6 +401,11 @@
   .pick-visit-btn{width:100%;text-align:left;display:flex;align-items:center;gap:10px;margin-bottom:8px;}
   .pick-visit-btn .pv-main{flex:1;min-width:0;}
   .pick-visit-btn .pv-sub{font-size:.78rem;color:var(--muted);font-weight:500;}
+  .reemb-actions{display:flex;gap:8px;margin-top:10px;}
+  .reemb-actions .reemb-quick{flex:1;padding:10px 12px;min-height:44px;font-size:.88rem;}
+  .reemb-actions .reemb-btn{margin-top:0;}
+  .reemb-actions .reemb-btn.btn-primary{flex:1;}
+  .reemb-banner{display:block;width:100%;text-align:left;border:1px dashed var(--border);background:transparent;color:var(--muted);border-radius:10px;padding:10px 12px;font-size:.82rem;margin-bottom:12px;cursor:pointer;}
   .reemb-hint{font-size:.78rem;color:var(--muted);margin-top:6px;}
   .tab-btn{font-size:.6rem;letter-spacing:0;padding:12px 1px;min-width:0;}
   .tab-btn{justify-content:flex-start;}
@@ -444,6 +449,7 @@
   var STORAGE_KEY = 'datamed_db_v2';
 
 var ICONS = {
+    'send':'<path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z" /> <path d="m21.854 2.147-10.94 10.939" />',
     'banknote':'<rect width="20" height="12" x="2" y="6" rx="2" /> <circle cx="12" cy="12" r="2" /> <path d="M6 12h.01M18 12h.01" />',
     'air-vent':'<path d="M18 17.5a2.5 2.5 0 1 1-4 2.03V12" /> <path d="M6 12H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" /> <path d="M6 8h12" /> <path d="M6.6 15.572A2 2 0 1 0 10 17v-5" />',
     'apple':'<path d="M12 6.528V3a1 1 0 0 1 1-1h0" /> <path d="M18.237 21A15 15 0 0 0 22 11a6 6 0 0 0-10-4.472A6 6 0 0 0 2 11a15.1 15.1 0 0 0 3.763 10 3 3 0 0 0 3.648.648 5.5 5.5 0 0 1 5.178 0A3 3 0 0 0 18.237 21" />',
@@ -791,59 +797,90 @@ var ICONS = {
     return out;
   }
 
+  // Siguiente paso del trámite: primero previsión, después seguro
+  function nextAction(r){
+    if(!r) return null;
+    if(r.prev.estado === 'pendiente') return { part: 'prev', act: 'enviar' };
+    if(r.prev.estado === 'enviado') return { part: 'prev', act: 'recibir' };
+    if(r.seg.estado === 'pendiente') return { part: 'seg', act: 'enviar' };
+    if(r.seg.estado === 'enviado') return { part: 'seg', act: 'recibir' };
+    return null;
+  }
+
+  function reembBucket(doc){
+    if(!doc.reembolso) return 'sinregistrar';
+    if(!isReembPending(doc)) return 'cerrados';
+    return needsAction(doc.reembolso) ? 'porenviar' : 'entramite';
+  }
+
   function renderReembCard(item){
     var p = item.person, v = item.visit, doc = item.doc;
+    var ids = ' data-doc-id="' + doc.id + '" data-visit-id="' + v.id + '" data-person-id="' + p.id + '"';
+    var na = nextAction(doc.reembolso);
+    var actions;
+    if(!doc.reembolso){
+      actions = '<button class="btn-primary reemb-btn"' + ids + ' type="button">Registrar reembolso</button>';
+    } else {
+      var primary = '';
+      if(na){
+        var who = esc(na.part === 'prev' ? prevLabel(p) : segLabel(p));
+        primary = na.act === 'enviar'
+          ? '<button class="btn-primary reemb-quick"' + ids + ' data-part="' + na.part + '" data-act="enviar" type="button">' + icon('send', 14) + ' Marqué enviado a ' + who + '</button>'
+          : '<button class="btn-primary reemb-quick"' + ids + ' data-part="' + na.part + '" data-act="recibir" type="button">' + icon('banknote', 14) + ' Recibí respuesta de ' + who + '</button>';
+      }
+      actions = primary + '<button class="btn-secondary reemb-btn reemb-edit"' + ids + ' type="button">' + icon('pencil', 14) + ' Editar</button>';
+    }
     return '' +
     '<div class="card">' +
       '<div style="display:flex;gap:10px;align-items:flex-start;">' +
-        '<img src="' + doc.dataUrl + '" style="width:56px;height:56px;object-fit:cover;border-radius:8px;cursor:pointer;flex-shrink:0;" class="view-doc-btn" data-doc-id="' + doc.id + '" data-visit-id="' + v.id + '" data-person-id="' + p.id + '" alt="Boleta">' +
+        '<img src="' + doc.dataUrl + '" style="width:56px;height:56px;object-fit:cover;border-radius:8px;cursor:pointer;flex-shrink:0;" class="view-doc-btn"' + ids + ' alt="Documento">' +
         '<div style="flex:1;min-width:0;">' +
           '<div class="reemb-who"><div class="avatar" style="background:' + colorForId(p.id) + ';width:24px;height:24px;font-size:.65rem;">' + initialsFor(p.name) + '</div>' + esc(p.name) + '</div>' +
           '<div class="card-subtitle" style="margin-top:2px;">' + formatDate(v.date) + (v.specialty ? ' · ' + esc(v.specialty) : '') + (v.healthCenter ? ' · ' + esc(v.healthCenter) : '') + '</div>' +
           '<span class="doc-type-tag ' + doc.type + '">' + docLabel(doc.type) + '</span>' +
           renderReembBlock(doc, p) +
-          '<button class="btn-secondary reemb-btn" data-doc-id="' + doc.id + '" data-visit-id="' + v.id + '" data-person-id="' + p.id + '" type="button">' + icon('pencil', 14) + ' ' + (doc.reembolso ? 'Actualizar' : 'Registrar reembolso') + '</button>' +
         '</div>' +
       '</div>' +
+      '<div class="reemb-actions">' + actions + '</div>' +
     '</div>';
   }
 
   function renderReembolsos(){
     var items = allBoletas();
-    var filter = view.filter || 'pendientes';
-    var pending = items.filter(function(it){ return isReembPending(it.doc); });
-    var untracked = items.filter(function(it){ return !it.doc.reembolso; });
-    var closed = items.filter(function(it){ return it.doc.reembolso && !isReembPending(it.doc); });
+    var filter = view.filter || 'porenviar';
+    if(filter === 'pendientes') filter = 'porenviar';
+    var groups = { porenviar: [], entramite: [], cerrados: [], sinregistrar: [] };
+    items.forEach(function(it){ groups[reembBucket(it.doc)].push(it); });
 
     var enTramite = 0, recuperado = 0;
-    items.forEach(function(it){ if(it.doc.reembolso) recuperado += reembRecuperado(it.doc.reembolso); });
-    pending.forEach(function(it){
+    items.forEach(function(it){
       var r = it.doc.reembolso;
-      if(hasVal(r.monto)) enTramite += Math.max(0, Number(r.monto) - reembRecuperado(r));
+      if(!r) return;
+      recuperado += reembRecuperado(r);
+      if(isReembPending(it.doc) && hasVal(r.monto)) enTramite += Math.max(0, Number(r.monto) - reembRecuperado(r));
     });
 
-    function chip(key, label, n){
-      return '<button class="filter-chip' + (filter === key ? ' active' : '') + '" data-filter="' + key + '" type="button">' + label + ' (' + n + ')</button>';
+    function chip(key, label){
+      return '<button class="filter-chip' + (filter === key ? ' active' : '') + '" data-filter="' + key + '" type="button">' + label + ' (' + groups[key].length + ')</button>';
     }
 
-    var body;
-    if(filter === 'pendientes'){
-      var porEnviar = pending.filter(function(it){ return needsAction(it.doc.reembolso); })
-        .sort(function(a, b){ return (a.visit.date || '').localeCompare(b.visit.date || ''); });
-      var esperando = pending.filter(function(it){ return !needsAction(it.doc.reembolso); })
-        .sort(function(a, b){ return oldestSent(a.doc.reembolso).localeCompare(oldestSent(b.doc.reembolso)); });
-      body = '';
-      if(!pending.length){
-        body = '<div class="empty">' + icon('banknote', 40) + '<br>No hay reembolsos pendientes.' + (untracked.length ? '<br>Tienes ' + untracked.length + ' boleta' + (untracked.length === 1 ? '' : 's') + ' sin registrar.' : '') + '</div>';
-      }
-      if(porEnviar.length) body += '<div class="reemb-group-title">Por enviar (' + porEnviar.length + ')</div>' + porEnviar.map(renderReembCard).join('');
-      if(esperando.length) body += '<div class="reemb-group-title">Esperando respuesta (' + esperando.length + ')</div>' + esperando.map(renderReembCard).join('');
-    } else {
-      var list = (filter === 'sinregistrar' ? untracked : closed)
-        .sort(function(a, b){ return (b.visit.date || '').localeCompare(a.visit.date || ''); });
-      body = list.length ? list.map(renderReembCard).join('') :
-        '<div class="empty">' + icon('banknote', 40) + '<br>' + (filter === 'sinregistrar' ? 'Todas las boletas tienen seguimiento.' : 'Aún no hay reembolsos cerrados.') + '</div>';
-    }
+    var list = groups[filter] || [];
+    if(filter === 'porenviar') list.sort(function(a, b){ return (a.visit.date || '').localeCompare(b.visit.date || ''); });
+    else if(filter === 'entramite') list.sort(function(a, b){ return oldestSent(a.doc.reembolso).localeCompare(oldestSent(b.doc.reembolso)); });
+    else list.sort(function(a, b){ return (b.visit.date || '').localeCompare(a.visit.date || ''); });
+
+    var emptyMsg = {
+      porenviar: 'Nada por enviar.',
+      entramite: 'Nada en trámite.',
+      cerrados: 'Aún no hay reembolsos cerrados.',
+      sinregistrar: 'Todas las boletas y bonos tienen seguimiento.'
+    }[filter];
+    var body = list.length ? list.map(renderReembCard).join('') :
+      '<div class="empty">' + icon('banknote', 40) + '<br>' + emptyMsg + '</div>';
+
+    var banner = (groups.sinregistrar.length && filter !== 'sinregistrar')
+      ? '<button class="reemb-banner" data-filter="sinregistrar" type="button">Tienes ' + groups.sinregistrar.length + ' boleta' + (groups.sinregistrar.length === 1 ? '' : 's') + ' o bono' + (groups.sinregistrar.length === 1 ? '' : 's') + ' sin seguimiento · Ver</button>'
+      : (filter === 'sinregistrar' ? '<button class="reemb-banner" data-filter="porenviar" type="button">&larr; Volver a reembolsos</button>' : '');
 
     return '' +
     '<div class="header">' +
@@ -856,12 +893,85 @@ var ICONS = {
         '<div><div class="num">' + fmtCLP(recuperado) + '</div><div class="lbl">Recuperado total</div></div>' +
       '</div>' +
       '<div class="filter-row">' +
-        chip('pendientes', 'Pendientes', pending.length) +
-        chip('sinregistrar', 'Sin registrar', untracked.length) +
-        chip('cerrados', 'Cerrados', closed.length) +
+        chip('porenviar', 'Por enviar') +
+        chip('entramite', 'En trámite') +
+        chip('cerrados', 'Cerrados') +
       '</div>' +
+      banner +
       body +
     '</div>';
+  }
+
+  function quickEnviar(personId, visitId, docId, part){
+    var f = findDoc(personId, visitId, docId);
+    if(!f || !f.doc.reembolso) return;
+    f.doc.reembolso[part].estado = 'enviado';
+    f.doc.reembolso[part].fecha = todayStr();
+    if(saveDB()) render();
+  }
+
+  function findDoc(personId, visitId, docId){
+    var person = db.people.filter(function(p){ return p.id === personId; })[0];
+    if(!person) return null;
+    var visit = person.visits.filter(function(v){ return v.id === visitId; })[0];
+    if(!visit) return null;
+    var doc = (visit.documents || []).filter(function(d){ return d.id === docId; })[0];
+    return doc ? { person: person, visit: visit, doc: doc } : null;
+  }
+
+  function openRecibirModal(personId, visitId, docId, part){
+    var f = findDoc(personId, visitId, docId);
+    if(!f || !f.doc.reembolso) return;
+    var r = f.doc.reembolso;
+    var who = part === 'prev' ? prevLabel(f.person) : segLabel(f.person);
+    var askMonto = !hasVal(r.monto);
+    modalRoot.innerHTML = '' +
+    '<div class="modal-overlay" id="modalOverlay">' +
+      '<div class="modal">' +
+        '<div class="modal-header">Respuesta de ' + esc(who) + '</div>' +
+        '<div class="modal-body">' +
+          '<div class="card-subtitle" style="margin-bottom:8px;">' + esc(f.person.name) + ' · ' + formatDate(f.visit.date) + (f.visit.specialty ? ' · ' + esc(f.visit.specialty) : '') + '</div>' +
+          (askMonto ? '<label for="q-total">' + (f.doc.type === 'bono' ? 'Copago pagado ($)' : 'Monto de la boleta ($)') + ' <span style="font-weight:400;">(opcional)</span></label>' +
+            '<input type="number" inputmode="numeric" min="0" id="q-total" placeholder="Ej: 45000">' : '') +
+          '<label for="q-monto">¿Cuánto te reembolsó? ($)</label>' +
+          '<input type="number" inputmode="numeric" min="0" id="q-monto" placeholder="Ej: 25000">' +
+        '</div>' +
+        '<div class="modal-actions doc-type-grid">' +
+          '<button class="btn-secondary" id="qRechazado" type="button">Fue rechazado</button>' +
+          '<button class="btn-primary" id="qGuardar" type="button">Guardar</button>' +
+          '<button class="btn-secondary" id="modalCancel" type="button">Cancelar</button>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+    bindModalShell();
+    setTimeout(function(){ var el = document.getElementById('q-monto'); if(el) el.focus(); }, 50);
+
+    function applyTotal(){
+      var t = document.getElementById('q-total');
+      if(t && t.value !== '') r.monto = Number(t.value);
+    }
+    document.getElementById('qGuardar').addEventListener('click', function(){
+      var m = document.getElementById('q-monto').value;
+      if(m === ''){ alert('Ingresa el monto reembolsado, o usa "Fue rechazado".'); return; }
+      var prevMonto = r.monto;
+      applyTotal();
+      var test = JSON.parse(JSON.stringify(r));
+      test[part].estado = 'reembolsado'; test[part].monto = Number(m);
+      if(hasVal(test.monto) && reembRecuperado(test) > Number(test.monto)){
+        r.monto = prevMonto;
+        alert('Lo reembolsado supera el monto de la boleta. Revisa los montos.');
+        return;
+      }
+      r[part].estado = 'reembolsado';
+      r[part].monto = Number(m);
+      if(saveDB()){ closeModal(); render(); }
+    });
+    document.getElementById('qRechazado').addEventListener('click', function(){
+      applyTotal();
+      r[part].estado = 'rechazado';
+      r[part].monto = '';
+      if(saveDB()){ closeModal(); render(); }
+    });
   }
 
   function openDocFromBtn(el){
@@ -1283,7 +1393,14 @@ var ICONS = {
         });
       });
     } else if(view.type === 'reembolsos'){
-      qa('.filter-chip').forEach(function(btn){
+      qa('.reemb-quick').forEach(function(btn){
+        btn.addEventListener('click', function(e){
+          e.stopPropagation();
+          if(btn.dataset.act === 'enviar') quickEnviar(btn.dataset.personId, btn.dataset.visitId, btn.dataset.docId, btn.dataset.part);
+          else openRecibirModal(btn.dataset.personId, btn.dataset.visitId, btn.dataset.docId, btn.dataset.part);
+        });
+      });
+      qa('.filter-chip, .reemb-banner').forEach(function(btn){
         btn.addEventListener('click', function(){
           view = { type: 'reembolsos', filter: btn.dataset.filter };
           render();
